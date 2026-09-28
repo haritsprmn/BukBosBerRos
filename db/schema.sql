@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS duitku.transactions (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS transactions_user_date_idx ON duitku.transactions(user_id,date DESC,created_at DESC);
+CREATE TABLE IF NOT EXISTS duitku.budgets (
+  user_id uuid NOT NULL REFERENCES duitku.users(id) ON DELETE CASCADE,
+  month date NOT NULL CHECK (
+    EXTRACT(DAY FROM month) = 1 AND month BETWEEN DATE '1900-01-01' AND DATE '2100-12-01'
+  ),
+  amount numeric(14,0) NOT NULL CHECK (amount > 0 AND amount <= 10000000000),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, month)
+);
 CREATE TABLE IF NOT EXISTS duitku.auth_attempts (
   key char(64) PRIMARY KEY,
   attempts integer NOT NULL DEFAULT 1,
