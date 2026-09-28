@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowDownLeft,
@@ -34,10 +34,12 @@ import {
   LoaderCircle,
   X,
   Menu,
+  RefreshCw,
   type LucideIcon,
 } from "lucide-react";
 import { Brand } from "./brand";
 import { Dialog } from "./dialog";
+import type { DashboardData, DashboardFilters } from "@/lib/dashboard";
 import {
   categories,
   rupiah,
@@ -88,19 +90,27 @@ function monthLabel(month: string) {
 
 export function Dashboard({
   user,
-  initialTransactions,
+  initialData,
   initialHideBalance,
 }: {
   user: User;
-  initialTransactions: Transaction[];
+  initialData: DashboardData;
   initialHideBalance: boolean;
 }) {
   const router = useRouter();
-  const [transactions, setTransactions] = useState(initialTransactions);
   const [view, setView] = useState<View>("dashboard");
-  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [month, setMonth] = useState(initialData.filters.month);
   const [query, setQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState<DashboardFilters["type"]>("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [revision, setRevision] = useState(0);
+  const parameters = new URLSearchParams({ month, type: typeFilter, category: categoryFilter, query }).toString();
+  const requestKey = `${parameters}&revision=${revision}`;
+  const [snapshot, setSnapshot] = useState({ key: requestKey, data: initialData });
+  const [loadFailure, setLoadFailure] = useState({ key: "", message: "" });
+  const loadError = loadFailure.key === requestKey ? loadFailure.message : "";
+  const refreshing = snapshot.key !== requestKey && !loadError;
+  const data = snapshot.data;
   const [page, setPage] = useState(1);
   const [hideBalance, setHideBalance] = useState(initialHideBalance);
   const [editor, setEditor] = useState<Transaction | "new" | null>(null);
@@ -111,31 +121,41 @@ export function Dashboard({
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   useEffect(() => {
+    if (snapshot.key === requestKey) return;
+    const controller = new AbortController();
+    // Debounce typing and cancel obsolete requests so older results cannot win.
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/dashboard?${parameters}`, {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        const result = await response.json();
+        if (controller.signal.aborted) return;
+        if (response.status === 401) {
+          router.replace("/login");
+          throw new Error("Session berakhir. Silakan masuk kembali.");
+        }
+        if (!response.ok) throw new Error(result.error || "Gagal memperbarui dashboard.");
+        setSnapshot({ key: requestKey, data: result });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setLoadFailure({ key: requestKey, message: error instanceof Error ? error.message : "Gagal memperbarui dashboard." });
+        }
+      }
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [parameters, requestKey, snapshot.key, router]);
+  useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 4500);
     return () => clearTimeout(timer);
   }, [toast]);
-  const selected = useMemo(
-    () => transactions.filter((t) => !month || t.date.startsWith(month)),
-    [transactions, month],
-  );
-  const income = selected
-    .filter((t) => t.type === "income")
-    .reduce((sum, t) => sum + t.amount, 0);
-  const expense = selected
-    .filter((t) => t.type === "expense")
-    .reduce((sum, t) => sum + t.amount, 0);
-  const balance = transactions.reduce(
-    (sum, t) => sum + (t.type === "income" ? t.amount : -t.amount),
-    0,
-  );
-  const filtered = selected.filter(
-    (t) =>
-      (typeFilter === "all" || t.type === typeFilter) &&
-      `${t.title} ${t.category} ${t.note}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
-  );
+  const { income, expense, balance, incomeCount, expenseCount } = data.summary;
+  const filtered = data.transactions;
   const pageSize = view === "dashboard" ? 5 : 10;
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const activePage = Math.min(page, pages);
@@ -143,18 +163,20 @@ export function Dashboard({
     (activePage - 1) * pageSize,
     activePage * pageSize,
   );
-  const grouped = categories.expense
-    .map((category) => ({
-      category,
-      total: selected
-        .filter((t) => t.type === "expense" && t.category === category)
-        .reduce((sum, t) => sum + t.amount, 0),
-    }))
-    .filter((x) => x.total > 0)
-    .sort((a, b) => b.total - a.total);
+  const { grouped, chartEnd, chartMonths } = data;
+  const filterCategories = typeFilter === "all"
+    ? [...new Set([...categories.income, ...categories.expense])]
+    : categories[typeFilter];
+  const hasFilters = query !== "" || typeFilter !== "all" || categoryFilter !== "all";
+  function resetFilters() {
+    setQuery("");
+    setTypeFilter("all");
+    setCategoryFilter("all");
+    setPage(1);
+  }
   const amount = (value: number) =>
     hideBalance ? "Rp •••••••" : rupiah(value);
-  const periodLabel = month ? monthLabel(month) : "Semua periode";
+  const periodLabel = data.filters.month ? monthLabel(data.filters.month) : "Semua periode";
   async function request(path: string, method: string, body: unknown = {}) {
     const response = await fetch(path, {
       method,
@@ -201,7 +223,7 @@ export function Dashboard({
     setError("");
     try {
       await request(`/api/transactions/${deleting.id}`, "DELETE");
-      setTransactions((prev) => prev.filter((t) => t.id !== deleting.id));
+      setRevision((value) => value + 1);
       setDeleting(null);
       setToast("Transaksi berhasil dihapus.");
     } catch (e) {
@@ -213,8 +235,6 @@ export function Dashboard({
   function navigate(next: View) {
     setView(next);
     setPage(1);
-    setQuery("");
-    setTypeFilter("all");
     setMobileMenu(false);
   }
   function exportCsv() {
@@ -252,23 +272,7 @@ export function Dashboard({
     URL.revokeObjectURL(url);
     setToast("Riwayat transaksi berhasil diekspor.");
   }
-  const chartEnd = month || localDate().slice(0, 7);
-  const chartMonths = Array.from({ length: 6 }, (_, i) => {
-    const d = new Date(chartEnd + "-01T12:00:00");
-    d.setMonth(d.getMonth() - 5 + i);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const rows = transactions.filter((t) => t.date.startsWith(key));
-    return {
-      key,
-      label: d.toLocaleDateString("id-ID", { month: "short" }),
-      income: rows
-        .filter((t) => t.type === "income")
-        .reduce((s, t) => s + t.amount, 0),
-      expense: rows
-        .filter((t) => t.type === "expense")
-        .reduce((s, t) => s + t.amount, 0),
-    };
-  });
+  const chartHasData = chartMonths.some((item) => item.income > 0 || item.expense > 0);
   const chartMax = Math.max(
     1,
     ...chartMonths.flatMap((m) => [m.income, m.expense]),
@@ -474,6 +478,45 @@ export function Dashboard({
               </button>
             </div>
           </div>
+          <section className="panel dashboard-filters" aria-label="Filter transaksi">
+            <div className="filter-tabs" aria-label="Jenis transaksi">
+              {([ ["all", "Semua"], ["income", "Pemasukan"], ["expense", "Pengeluaran"] ] as const).map(([id, label]) => (
+                <button key={id} className={typeFilter === id ? "active" : ""}
+                  aria-pressed={typeFilter === id}
+                  onClick={() => {
+                    setTypeFilter(id);
+                    if (id !== "all" && !categories[id].includes(categoryFilter)) setCategoryFilter("all");
+                    setPage(1);
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <select className="category-filter" aria-label="Kategori transaksi" value={categoryFilter}
+              onChange={(event) => { setCategoryFilter(event.target.value); setPage(1); }}>
+              <option value="all">Semua kategori</option>
+              {filterCategories.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+            <label className="search-input">
+              <Search size={16} />
+              <input aria-label="Cari transaksi" placeholder="Cari nama, kategori, catatan…" maxLength={100} value={query}
+                onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
+            </label>
+            {hasFilters && <button className="text-button" onClick={resetFilters}>Reset filter</button>}
+            <button className="button small-button" onClick={() => setRevision((value) => value + 1)} disabled={refreshing}>
+              <RefreshCw size={15} className={refreshing ? "spin" : ""} /> Perbarui data
+            </button>
+          </section>
+          <div className="dashboard-load-status" role="status" aria-live="polite">
+            {refreshing
+              ? "Memperbarui data… Hasil sebelumnya tetap ditampilkan."
+              : loadError ? "Data belum diperbarui. Hasil sebelumnya tetap ditampilkan."
+              : `${filtered.length} transaksi sesuai filter. Total dan rincian kategori mengikuti filter; saldo mencakup seluruh transaksi.`}
+          </div>
+          {loadError && <div className="form-error dashboard-error" role="alert">
+            {loadError}
+            <button className="text-button" onClick={() => setRevision((value) => value + 1)}>Coba lagi</button>
+          </div>}
           <section className="stats-grid" aria-label="Ringkasan keuangan">
             <article className="stat-card balance-card">
               <div className="stat-top">
@@ -508,7 +551,7 @@ export function Dashboard({
               <strong>{amount(income)}</strong>
               <div className="stat-bottom">
                 <span className="income-dot" />
-                {selected.filter((t) => t.type === "income").length} transaksi
+                {incomeCount} transaksi
                 pemasukan
                 <span className="mini-bars income-bars" aria-hidden="true">
                   ▂▅▃▆▄▇
@@ -525,7 +568,7 @@ export function Dashboard({
               <strong>{amount(expense)}</strong>
               <div className="stat-bottom">
                 <span className="expense-dot" />
-                {selected.filter((t) => t.type === "expense").length} transaksi
+                {expenseCount} transaksi
                 pengeluaran
                 <span className="mini-bars expense-bars" aria-hidden="true">
                   ▅▃▆▂▅▄
@@ -539,7 +582,7 @@ export function Dashboard({
                 <div className="panel-heading">
                   <div>
                     <h2>Arus kas</h2>
-                    <p>Langkah finansialmu dalam 6 bulan terakhir</p>
+                    <p>6 bulan hingga {monthLabel(chartEnd)}, sesuai jenis, kategori, dan kata kunci</p>
                   </div>
                   <span className="subtle-icon">
                     <ChartNoAxesCombined size={19} />
@@ -571,7 +614,7 @@ export function Dashboard({
                           : new Intl.NumberFormat("id-ID", {
                               notation: "compact",
                               maximumFractionDigits: 1,
-                            }).format(chartMax === 1 ? 0 : chartMax * n)}
+                            }).format(chartHasData ? chartMax * n : 0)}
                       </span>
                     ))}
                   </div>
@@ -610,7 +653,7 @@ export function Dashboard({
                         </div>
                       ))}
                     </div>
-                    {(chartMax === 1 || hideBalance) && (
+                    {(!chartHasData || hideBalance) && (
                       <div className="chart-empty">
                         {hideBalance
                           ? "Nominal sedang disembunyikan"
@@ -621,9 +664,21 @@ export function Dashboard({
                 </div>
                 <div className="chart-footnote">
                   <span className="tiny-dot" />
-                  {month ? "6 bulan hingga " + periodLabel : "6 bulan terakhir"}
+                  {"6 bulan hingga " + monthLabel(chartEnd)}
                   <span>Pantau, pahami, rencanakan.</span>
                 </div>
+                <details className="chart-data-table">
+                  <summary>Lihat angka arus kas per bulan</summary>
+                  <div className="table-scroll">
+                    <table>
+                      <caption>Arus kas sesuai jenis, kategori, dan kata kunci</caption>
+                      <thead><tr><th scope="col">Bulan</th><th scope="col">Pemasukan</th><th scope="col">Pengeluaran</th><th scope="col">Selisih</th></tr></thead>
+                      <tbody>{chartMonths.map((item) => <tr key={item.key}>
+                        <th scope="row">{monthLabel(item.key)}</th><td>{amount(item.income)}</td><td>{amount(item.expense)}</td><td>{amount(item.income - item.expense)}</td>
+                      </tr>)}</tbody>
+                    </table>
+                  </div>
+                </details>
               </article>
               <article className="panel spending-panel">
                 <div className="panel-heading">
@@ -728,7 +783,7 @@ export function Dashboard({
                       />
                     </div>
                     <strong>{amount(g.total)}</strong>
-                    <small>{Math.round((g.total / expense) * 100)}%</small>
+                    <small>{hideBalance ? "••" : Math.round((g.total / expense) * 100) + "%"}</small>
                   </div>
                 ))
               ) : (
@@ -748,7 +803,7 @@ export function Dashboard({
                     {view === "dashboard"
                       ? "Transaksi terbaru"
                       : "Semua transaksi"}
-                    <span className="count-badge">{selected.length}</span>
+                    <span className="count-badge">{filtered.length}</span>
                   </h2>
                   <p>Catatan kecil untuk kendali yang lebih besar.</p>
                 </div>
@@ -762,46 +817,13 @@ export function Dashboard({
                 ) : (
                   <button
                     className="button small-button"
-                    disabled={!filtered.length}
+                    disabled={!filtered.length || refreshing || !!loadError}
                     onClick={exportCsv}
                   >
                     <Download size={15} />
                     Ekspor CSV
                   </button>
                 )}
-              </div>
-              <div className="table-toolbar">
-                <div className="filter-tabs" aria-label="Jenis transaksi">
-                  {[
-                    ["all", "Semua"],
-                    ["income", "Pemasukan"],
-                    ["expense", "Pengeluaran"],
-                  ].map(([id, label]) => (
-                    <button
-                      key={id}
-                      className={typeFilter === id ? "active" : ""}
-                      aria-pressed={typeFilter === id}
-                      onClick={() => {
-                        setTypeFilter(id);
-                        setPage(1);
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <label className="search-input">
-                  <Search size={16} />
-                  <input
-                    aria-label="Cari transaksi"
-                    placeholder="Cari transaksi…"
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      setPage(1);
-                    }}
-                  />
-                </label>
               </div>
               {shown.length ? (
                 <>
@@ -918,25 +940,23 @@ export function Dashboard({
                     <ArrowLeftRight size={26} />
                   </span>
                   <h3>
-                    {query || typeFilter !== "all"
+                    {hasFilters
                       ? "Transaksi tidak ditemukan."
                       : "Mulai cerita keuanganmu."}
                   </h3>
                   <p>
-                    {query || typeFilter !== "all"
+                    {hasFilters
                       ? "Coba kata kunci atau filter yang lain."
                       : "Belum ada transaksi pada periode ini. Yuk, catat yang pertama."}
                   </p>
                   <button
                     className="text-button"
                     onClick={() => {
-                      if (query || typeFilter !== "all") {
-                        setQuery("");
-                        setTypeFilter("all");
-                      } else setEditor("new");
+                      if (hasFilters) resetFilters();
+                      else setEditor("new");
                     }}
                   >
-                    {query || typeFilter !== "all"
+                    {hasFilters
                       ? "Reset filter"
                       : "Tambah transaksi"}
                     <ArrowRight size={16} />
@@ -983,11 +1003,7 @@ export function Dashboard({
           request={request}
           onClose={() => setEditor(null)}
           onSave={(t) => {
-            setTransactions((prev) =>
-              [t, ...prev.filter((x) => x.id !== t.id)].sort((a, b) =>
-                b.date.localeCompare(a.date),
-              ),
-            );
+            setRevision((value) => value + 1);
             setEditor(null);
             setPage(1);
             if (month && !t.date.startsWith(month))

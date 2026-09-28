@@ -7,6 +7,7 @@ const eslintConfig = defineConfig([
   ...nextTs,
   // Override default ignores of eslint-config-next.
   globalIgnores([
+    "__MACOSX/**",
     "output/**",
     ".playwright-cli/**",
     // Default ignores of eslint-config-next:
