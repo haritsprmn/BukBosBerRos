@@ -86,41 +86,6 @@ function monthLabel(month: string) {
   });
 }
 
-function validateTransactionInput({
-  title,
-  amount,
-  type,
-  category,
-  date,
-  note,
-}: {
-  title: string;
-  amount: number;
-  type: "income" | "expense";
-  category: string;
-  date: string;
-  note: string;
-}) {
-  if (!title.trim()) return "Nama transaksi wajib diisi.";
-  if (title.trim().length > 100) return "Nama transaksi maksimal 100 karakter.";
-  if (!Number.isInteger(amount) || amount < 1)
-    return "Nominal harus berupa rupiah bulat dan lebih dari nol.";
-  if (amount > 10000000000) return "Nominal maksimal Rp10 miliar.";
-  if (!categories[type].includes(category))
-    return "Kategori tidak sesuai jenis transaksi.";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "Tanggal tidak valid.";
-  const parsedDate = new Date(date + "T00:00:00Z");
-  if (
-    isNaN(parsedDate.getTime()) ||
-    parsedDate.toISOString().slice(0, 10) !== date ||
-    date < "1900-01-01" ||
-    date > "2100-12-31"
-  )
-    return "Tanggal tidak valid.";
-  if (note.trim().length > 500) return "Catatan maksimal 500 karakter.";
-  return null;
-}
-
 export function Dashboard({
   user,
   initialTransactions,
@@ -196,7 +161,7 @@ export function Dashboard({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await response.json().catch(() => ({}));
+    const data = await response.json();
     if (response.status === 401) {
       router.replace("/login");
       router.refresh();
@@ -1153,29 +1118,23 @@ function TransactionEditor({
   const [error, setError] = useState("");
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setBusy(true);
     setError("");
     const form = new FormData(event.currentTarget);
-    const payload = {
-      title: String(form.get("title") ?? ""),
-      amount: Number(form.get("amount")),
-      type,
-      category,
-      date: String(form.get("date") ?? ""),
-      note: String(form.get("note") ?? ""),
-    };
-    const validationError = validateTransactionInput(payload);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-    setBusy(true);
     try {
       const result = await request(
         transaction
           ? `/api/transactions/${transaction.id}`
           : "/api/transactions",
         transaction ? "PATCH" : "POST",
-        payload,
+        {
+          title: form.get("title"),
+          amount: Number(form.get("amount")),
+          type,
+          category,
+          date: form.get("date"),
+          note: form.get("note"),
+        },
       );
       onSave(result.transaction);
     } catch (e) {
