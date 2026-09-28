@@ -24,6 +24,23 @@ export const registerSchema = z.object({
   password: z.string().min(8, "Kata sandi minimal 8 karakter.").max(128),
 });
 export const loginSchema = registerSchema.pick({ email: true, password: true });
+export const budgetMonthSchema = z.string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Bulan tidak valid. Gunakan YYYY-MM.")
+  .refine((month) => month >= "1900-01" && month <= "2100-12", "Bulan harus antara 1900–2100.");
+export const budgetSchema = z.object({
+  month: budgetMonthSchema,
+  amount: z.number().int("Anggaran harus berupa rupiah bulat.")
+    .positive("Anggaran harus lebih dari nol.")
+    .max(10000000000, "Anggaran maksimal Rp10 miliar."),
+}).strict();
+export type BudgetSummary = {
+  month: string;
+  amount: number | null;
+  expense: number;
+  remaining: number | null;
+  percentage: number | null;
+  exceeded: boolean;
+};
 export const transactionSchema = z
   .object({
     title: z.string().trim().min(1, "Nama transaksi wajib diisi.").max(100),

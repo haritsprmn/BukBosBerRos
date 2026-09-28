@@ -37,6 +37,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Brand } from "./brand";
+import { BudgetPanel } from "./budget-panel";
 import { Dialog } from "./dialog";
 import {
   categories,
@@ -533,6 +534,11 @@ export function Dashboard({
               </div>
             </article>
           </section>
+          {month ? (
+            <BudgetPanel key={month} month={month} transactions={transactions} hideBalance={hideBalance} />
+          ) : (
+            <section className="panel budget-period-hint">Pilih satu bulan pada filter periode untuk melihat dan mengatur anggaran bulanan.</section>
+          )}
           {view !== "transactions" && (
             <section className="charts-grid">
               <article className="panel cashflow-panel">

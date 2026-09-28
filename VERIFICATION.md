@@ -38,3 +38,23 @@ Screenshot berada di `output/playwright/`:
 - `dashboard-mobile.png`
 
 Nominal dan akun pada screenshot dashboard adalah data sementara di database QA lokal, bukan data pengguna pada database utama. Folder `output/` diabaikan Git dan tidak digunakan aplikasi produksi.
+
+## SRS-10–12 — 28 September 2026
+
+- Tabel `duitku.budgets` berhasil dimigrasikan ke PostgreSQL proyek dengan `npm run db:migrate`.
+- `npm run lint`, `npm run typecheck`, dan `npm run build`: lulus.
+- `TEST_BASE_URL=http://localhost:3100 npm run test:integration`: **58 pemeriksaan lulus** menggunakan build produksi dan PostgreSQL proyek. Data akun pengujian dibersihkan otomatis.
+- Cakupan tambahan: API anggaran, isolasi antar-akun, session kedaluwarsa, validasi nominal/bulan, penolakan pemalsuan pemilik dan Origin lain, persistensi/upsert, ringkasan per bulan, batas akhir bulan, pemindahan tanggal transaksi, dan peringatan setelah penghapusan transaksi.
+- Verifikasi visual panel baru belum dilakukan: tidak ada browser yang tersedia melalui alat browser pada sesi ini. Pengujian integrasi memverifikasi API dan respons halaman, bukan interaksi AJAX di browser.
+- Dokumentasi penggunaan, kontrak API, dan batasan perhitungan: `db/BUDGET.md`.
+
+### Verifikasi visual melalui browser terintegrasi VS Code
+
+Pada sesi lanjutan 28 September 2026, dashboard `http://localhost:3000/dashboard` berhasil diakses melalui kontrol aplikasi desktop VS Code.
+
+- Panel anggaran terlihat di bawah kartu ringkasan; judul, nominal, input, dan tombol simpan terbaca tanpa tumpang tindih pada tata letak yang diperiksa.
+- Teramati tata letak ringkasan tiga kolom pada area lebar dan baris bertumpuk pada area lebih sempit.
+- Pergantian September ke Oktober memperbarui judul panel dan pengeluaran dari Rp100.000 menjadi Rp0 tanpa navigasi halaman; kembali ke September mengembalikan Rp100.000.
+- Mode semua periode menampilkan petunjuk memilih satu bulan, dan tombol Bulan ini mengembalikan panel anggaran.
+- Periode dikembalikan ke September. Tidak ada anggaran atau transaksi pengguna yang diubah.
+- Cakupan visual ini hanya keadaan anggaran belum ditetapkan dan pergantian periode. Penyimpanan anggaran, progress bar, dan peringatan terlampaui belum diuji secara visual; logikanya sudah tercakup tes integrasi di atas.

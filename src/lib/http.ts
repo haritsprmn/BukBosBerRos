@@ -3,7 +3,11 @@ import { ZodError } from "zod";
 
 export function checkOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  if (!origin || origin !== new URL(request.url).origin)
+  // Next.js can normalize request.url to its listening hostname. The Host
+  // header retains the address actually requested by the browser.
+  const url = new URL(request.url);
+  const expectedOrigin = `${url.protocol}//${request.headers.get("host") ?? url.host}`;
+  if (!origin || origin !== expectedOrigin)
     return NextResponse.json(
       { error: "Permintaan tidak diizinkan." },
       { status: 403 },
