@@ -60,6 +60,8 @@ try {
     const denied = await anonymous.call("/api/budgets?month=2026-09", method, method === "PUT" ? { month: "2026-09", amount: 50000 } : undefined);
     check(`Anonymous budget ${method} denied`, () => assert.equal(denied.status, 401));
   }
+  const anonymousDashboard = await anonymous.call("/api/dashboard");
+  check("Anonymous dashboard data denied", () => assert.equal(anonymousDashboard.status, 401));
   const protectedPage = await anonymous.call("/dashboard");
   check("Dashboard redirects anonymous visitors", () =>
     assert.ok(
@@ -158,6 +160,69 @@ try {
     );
   });
   const otherList = await b.call("/api/transactions");
+  const dashboard = await a.call("/api/dashboard?month=2026-09");
+  check("SRS-07 dashboard totals and history", () => {
+    assert.equal(dashboard.status, 200);
+    assert.deepEqual(dashboard.data.summary, {
+      balance: 975000, income: 1000000, expense: 25000, incomeCount: 1, expenseCount: 1,
+    });
+    assert.equal(dashboard.data.transactions.length, 2);
+    assert.match(dashboard.headers.get("cache-control"), /no-store/);
+  });
+  const combinedFilters = new URLSearchParams({
+    month: "2026-09", type: "expense", category: "Makan & minum", query: "  MAKAN  ",
+  });
+  const filteredDashboard = await a.call(`/api/dashboard?${combinedFilters}`);
+  check("SRS-08 combined month, type, category and case-insensitive search", () => {
+    assert.equal(filteredDashboard.status, 200);
+    assert.deepEqual(filteredDashboard.data.transactions.map((t) => t.id), [id]);
+    assert.equal(filteredDashboard.data.summary.income, 0);
+    assert.equal(filteredDashboard.data.summary.expense, 25000);
+    assert.equal(filteredDashboard.data.summary.balance, 975000);
+  });
+  const incomeDashboard = await a.call("/api/dashboard?type=income");
+  check("Income filter and all periods", () => {
+    assert.equal(incomeDashboard.data.transactions.length, 1);
+    assert.equal(incomeDashboard.data.summary.income, 1000000);
+    assert.equal(incomeDashboard.data.summary.expense, 0);
+    assert.deepEqual(incomeDashboard.data.grouped, []);
+  });
+  for (const query of ["INTEGRATION TEST", "minum"]) {
+    const searched = await a.call(`/api/dashboard?query=${encodeURIComponent(query)}`);
+    check(`Search includes notes and categories: ${query}`, () => {
+      assert.equal(searched.status, 200);
+      assert.ok(searched.data.transactions.some((t) => t.id === id));
+    });
+  }
+  const emptyDashboard = await a.call("/api/dashboard?month=2025-01");
+  check("Empty month has zero totals, six zero-filled chart months and overall balance", () => {
+    assert.equal(emptyDashboard.data.transactions.length, 0);
+    assert.equal(emptyDashboard.data.summary.income, 0);
+    assert.equal(emptyDashboard.data.summary.expense, 0);
+    assert.equal(emptyDashboard.data.summary.balance, 975000);
+    assert.equal(emptyDashboard.data.chartMonths.length, 6);
+    assert.equal(emptyDashboard.data.chartMonths[0].key, "2024-08");
+    assert.ok(emptyDashboard.data.chartMonths.every((m) => m.income === 0 && m.expense === 0));
+  });
+  check("SRS-09 cashflow and category report match filtered transactions", () => {
+    assert.deepEqual(dashboard.data.grouped, [{ category: "Makan & minum", total: 25000 }]);
+    assert.deepEqual(dashboard.data.chartMonths.at(-1), {
+      key: "2026-09", label: "Sep", income: 1000000, expense: 25000,
+    });
+    assert.equal(filteredDashboard.data.chartMonths.at(-1).income, 0);
+  });
+  const otherDashboard = await b.call("/api/dashboard?month=2026-09");
+  check("Dashboard and reports exclude other users' data", () => {
+    assert.equal(otherDashboard.data.transactions.length, 0);
+    assert.equal(otherDashboard.data.summary.balance, 0);
+    assert.deepEqual(otherDashboard.data.grouped, []);
+  });
+  for (const params of ["month=2026-13", "month=1899-01", "type=unknown", "category=unknown", `query=${"x".repeat(101)}`]) {
+    const invalidFilter = await a.call(`/api/dashboard?${params}`);
+    check(`Invalid dashboard filter rejected: ${params.slice(0, 30)}`, () => assert.equal(invalidFilter.status, 400));
+  }
+  const literalSearch = await a.call("/api/dashboard?query=%25");
+  check("Search treats wildcard characters literally", () => assert.equal(literalSearch.data.transactions.length, 0));
   check("Other user cannot list transactions", () =>
     assert.equal(otherList.data.transactions.length, 0),
   );
@@ -249,6 +314,13 @@ try {
   await a.call(`/api/transactions/${id}`, "PATCH", { ...expense, date: "2026-09-30", amount: 30000 });
   const lastDay = await a.call(budgetPath);
   check("Last day of selected month is included", () => assert.equal(lastDay.data.summary.expense, 30000));
+  const updatedDashboard = await a.call("/api/dashboard?month=2026-09&query=malam");
+  check("Dashboard refresh includes edited transaction, totals and chart", () => {
+    assert.equal(updatedDashboard.data.transactions[0].title, "Makan malam");
+    assert.equal(updatedDashboard.data.summary.expense, 30000);
+    assert.equal(updatedDashboard.data.summary.balance, 970000);
+    assert.equal(updatedDashboard.data.chartMonths.at(-1).expense, 30000);
+  });
   const prefs = await a.call("/api/preferences", "POST", { hideBalance: true });
   check("Persistent preference cookie", () => {
     assert.equal(prefs.status, 200);
@@ -270,6 +342,12 @@ try {
     assert.equal(afterDeleteBudget.data.summary.expense, 0);
     assert.equal(afterDeleteBudget.data.summary.remaining, 20000);
     assert.equal(afterDeleteBudget.data.summary.exceeded, false);
+  const deletedDashboard = await a.call("/api/dashboard?month=2026-09");
+  check("Dashboard refresh removes deleted transaction from totals and report", () => {
+    assert.equal(deletedDashboard.data.transactions.length, 1);
+    assert.equal(deletedDashboard.data.summary.balance, 1000000);
+    assert.equal(deletedDashboard.data.summary.expense, 0);
+    assert.deepEqual(deletedDashboard.data.grouped, []);
   });
   const oldCookie = a.cookie;
   await a.call("/api/auth/logout", "POST", {});
